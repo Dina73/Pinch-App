@@ -3,81 +3,239 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Pinch Analysis Tool", layout="wide")
 st.title("Heat Integration & Pinch Analysis App")
 
-# 1. Input Section
+st.sidebar.title("Heat Integration Tool")
+st.sidebar.write("Pinch Analysis Application")
+st.sidebar.write("Graduation Project")
+
+st.write("Enter Stream Data")
+
+# Input Table
 data = st.data_editor(
     pd.DataFrame({
-        "Stream": ["H1", "H2", "H3", "H4", "H5", "H6", "C1", "C2", "C3", "C4", "C5"],
-        "Type": ["Hot", "Hot", "Hot", "Hot", "Hot", "Hot", "Cold", "Cold", "Cold", "Cold", "Cold"],
-        "Tin": [118, 103, 84, 118, 104, 85, 30, 65, 85, 95, 110],
-        "Tout": [103, 84, 53, 104, 85, 54, 65, 85, 105, 110, 118],
-        "Cp": [3116.4, 1148.4, 360.5, 194.0, 155.1, 113.2, 519.5, 485.1, 450.1, 417.6, 302.9]
+        "Stream": ["H1", "C1"],
+        "Type": ["Hot", "Cold"],
+        "Tin": [180, 30],
+        "Tout": [40, 150],
+        "Cp": [2.3, 1.8]
     }),
     num_rows="dynamic"
 )
 
-deltaT = st.number_input("Enter ΔTmin (°C)", value=10)
+deltaT = st.number_input("Enter ΔTmin", value=10)
 
-# EVERYTHING must be inside this if-statement
-if st.button("Generate Final Correct Curve"):
+if st.button("Calculate Pinch"):
+
     hot = data[data["Type"] == "Hot"].copy()
     cold = data[data["Type"] == "Cold"].copy()
 
-    # --- Step 1: Calculate the Pinch and QH ---
-    hot["Ts_shift"] = hot["Tin"] - deltaT/2
-    hot["Tt_shift"] = hot["Tout"] - deltaT/2
-    cold["Ts_shift"] = cold["Tin"] + deltaT/2
-    cold["Tt_shift"] = cold["Tout"] + deltaT/2
+    # Shift Temperatures
+    hot["Tin_shift"] = hot["Tin"] - deltaT/2
+    hot["Tout_shift"] = hot["Tout"] - deltaT/2
 
-    temps_shifted = sorted(list(set(list(hot["Ts_shift"]) + list(hot["Tt_shift"]) + 
-                                    list(cold["Ts_shift"]) + list(cold["Tt_shift"]))), reverse=True)
+    cold["Tin_shift"] = cold["Tin"] + deltaT/2
+    cold["Tout_shift"] = cold["Tout"] + deltaT/2
 
-    dh_intervals = []
-    for i in range(len(temps_shifted)-1):
-        th, tl = temps_shifted[i], temps_shifted[i+1]
-        cp_h = hot[(hot["Ts_shift"] >= th) & (hot["Tt_shift"] <= tl)]["Cp"].sum()
-        cp_c = cold[(cold["Tt_shift"] >= th) & (cold["Ts_shift"] <= tl)]["Cp"].sum()
-        dh_intervals.append((cp_h - cp_c) * (th - tl))
+    st.subheader("Shifted Temperatures")
+    st.write(pd.concat([hot, cold]))
 
-    cascade = [0]
-    for dh in dh_intervals:
-        cascade.append(cascade[-1] + dh)
+    # Temperature List
+    temps = list(hot["Tin_shift"]) + list(hot["Tout_shift"]) + \
+            list(cold["Tin_shift"]) + list(cold["Tout_shift"])
+
+    temps = sorted(set(temps), reverse=True)
+
+    st.subheader("Temperature Intervals")
+    st.write(temps)
+
+    # Heat Cascade Calculation
+    interval_data = []
+
+    for i in range(len(temps)-1):
+
+        t_high = temps[i]
+        t_low = temps[i+1]
+
+        cp_hot = hot[(hot["Tin_shift"] >= t_high) & 
+                     (hot["Tout_shift"] <= t_low)]["Cp"].sum()
+
+        cp_cold = cold[(cold["Tout_shift"] >= t_high) & 
+                       (cold["Tin_shift"] <= t_low)]["Cp"].sum()
+
+        deltaH = (cp_hot - cp_cold) * (t_high - t_low)
+
+        interval_data.append([t_high, t_low, cp_hot, cp_cold, deltaH])
+
+    cascade = pd.DataFrame(interval_data,
+                           columns=["T_high","T_low","Cp_hot","Cp_cold","ΔH"])
+
+    st.subheader("Heat Cascade Table")
+    st.write(cascade)
+
+    # Heat Cascade
+    heat = [0]
+
+    for q in cascade["ΔH"]:
+        heat.append(heat[-1] + q)
+
+    cascade["Heat Cascade"] = heat[1:]
+
+    st.subheader("Heat Cascade")
+    st.write(cascade)
+
+    # Minimum Heating
+    min_heat = abs(min(heat))
+
+    st.subheader("Minimum Heating Required")
+    st.write(min_heat)
+
+    # Shift Cascade
+    adjusted = [h + min_heat for h in heat]
+
+    min_cooling = adjusted[-1]
+
+    st.subheader("Minimum Cooling Required")
+    st.write(min_cooling)
+
+    # Pinch Temperature
+    pinch_index = adjusted.index(min(adjusted))
+
+    pinch_temp = temps[pinch_index]
+
+    st.subheader("Pinch Temperature")
+    st.success(pinch_temp)
     
-    qh = abs(min(cascade)) if min(cascade) < 0 else 0
+    st.subheader("Composite Curves")
 
-    # --- Step 2: Plotting Logic (High-to-Low Enthalpy) ---
-    # Hot Composite
-    h_temps = sorted(list(set(list(hot["Tin"]) + list(hot["Tout"]))), reverse=True)
-    h_q_plot, h_t_plot = [0], [h_temps[0]]
-    for i in range(len(h_temps)-1):
-        th, tl = h_temps[i], h_temps[i+1]
-        cp = hot[(hot["Tin"] >= th) & (hot["Tout"] <= tl)]["Cp"].sum()
-        h_q_plot.append(h_q_plot[-1] + cp * (th - tl))
-        h_t_plot.append(tl)
+    # Hot Composite Curve
+    hot_streams = []
 
-    # Cold Composite (Starting at QH to shift right)
-    c_temps = sorted(list(set(list(cold["Tin"]) + list(cold["Tout"]))), reverse=True)
-    c_q_plot, c_t_plot = [qh], [c_temps[0]] 
-    for i in range(len(c_temps)-1):
-        th, tl = c_temps[i], c_temps[i+1]
-        cp = cold[(cold["Tout"] >= th) & (cold["Tin"] <= tl)]["Cp"].sum()
-        c_q_plot.append(c_q_plot[-1] + cp * (th - tl))
-        c_t_plot.append(tl)
+    for index, row in hot.iterrows():
+        hot_streams.append([row["Tin_shift"], row["Tout_shift"], row["Cp"]])
 
-    # --- Step 3: Visualization (Style matches "clear one.jpg") ---
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(h_q_plot, h_t_plot, color='red', label='Hot Composite', linewidth=1.5)
-    ax.plot(c_q_plot, c_t_plot, color='blue', label='Cold Composite', linewidth=1.5)
+    cold_streams = []
+
+    for index, row in cold.iterrows():
+        cold_streams.append([row["Tin_shift"], row["Tout_shift"], row["Cp"]])
+
+    # Temperature Range
+    all_temps = sorted(temps, reverse=True)
+
+    hot_q = [0]
+    cold_q = [0]
+
+    for i in range(len(all_temps)-1):
+
+        t_high = all_temps[i]
+        t_low = all_temps[i+1]
+
+        cp_hot = sum([cp for tin,tout,cp in hot_streams 
+                      if tin >= t_high and tout <= t_low])
+
+        cp_cold = sum([cp for tin,tout,cp in cold_streams 
+                       if tout >= t_high and tin <= t_low])
+
+        dq_hot = cp_hot*(t_high-t_low)
+        dq_cold = cp_cold*(t_high-t_low)
+
+        hot_q.append(hot_q[-1] + dq_hot)
+        cold_q.append(cold_q[-1] + dq_cold)
+
+    # Plot Composite Curves
+    plt.figure()
+
+    plt.plot(hot_q, all_temps, label="Hot Composite")
+    plt.plot(cold_q, all_temps, label="Cold Composite")
+
+    plt.xlabel("Heat Flow")
+    plt.ylabel("Temperature")
+
+    plt.legend()
+
+    plt.gca().invert_yaxis()
+
+    st.pyplot(plt)
     
-    ax.set_xlim(0, 100000)
-    ax.set_ylim(30, 200)
-    ax.set_xticks(np.arange(0, 110000, 10000))
-    ax.set_yticks(np.arange(30, 210, 20))
-    ax.set_xlabel("Enthalpy H (kW)")
-    ax.set_ylabel("Temperature T (°C)")
-    ax.grid(True, which='both', color='gray', linestyle='-', linewidth=0.5, alpha=0.7)
-    ax.legend()
+    st.subheader("Grand Composite Curve")
+
+    # Grand Composite Curve Data
+    gcc_heat = adjusted
+    gcc_temp = temps
+
+    plt.figure()
+
+    plt.step(gcc_heat, gcc_temp, where="post")
+
+    plt.xlabel("Net Heat Flow")
+    plt.ylabel("Temperature")
+
+    plt.gca().invert_yaxis()
+
+    st.pyplot(plt)
     
-    st.pyplot(fig)
+    st.subheader("Heat Exchanger Matching")
+
+    matches = []
+
+    # Available Heat Streams
+    hot_streams = hot.copy()
+    cold_streams = cold.copy()
+
+    for i, h in hot_streams.iterrows():
+        for j, c in cold_streams.iterrows():
+
+            # Temperature feasibility
+            if h["Tin"] > c["Tout"]:
+
+                # Heat Available
+                Q_hot = h["Cp"] * (h["Tin"] - h["Tout"])
+                Q_cold = c["Cp"] * (c["Tout"] - c["Tin"])
+
+                Q = min(Q_hot, Q_cold)
+
+                if Q > 0:
+
+                    matches.append([
+                        h["Stream"],
+                        c["Stream"],
+                        round(Q,2)
+                    ])
+
+    if matches:
+
+        match_df = pd.DataFrame(
+            matches,
+            columns=["Hot Stream","Cold Stream","Heat Exchange"]
+        )
+
+        st.write("Suggested Heat Exchanger Matches")
+        st.write(match_df)
+
+    else:
+        st.write("No feasible matches found")
+        
+    st.subheader("Heat Exchanger Network Diagram")
+
+    for m in matches:
+        st.write(f"{m[0]}  →  {m[1]}  :  {m[2]} kW")
+
+    # Display Utilities
+    st.subheader("Utility Targets")
+
+    col1, col2 = st.columns(2)
+
+    col1.metric("Minimum Heating", round(min_heat,2))
+    col2.metric("Minimum Cooling", round(min_cooling,2))
+
+    # Plot Heat Cascade
+    plt.figure()
+
+    plt.plot(adjusted, temps)
+
+    plt.xlabel("Heat Flow")
+    plt.ylabel("Temperature")
+
+    plt.gca().invert_yaxis()
+
+    st.pyplot(plt)
