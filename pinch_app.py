@@ -20,21 +20,21 @@ data = st.data_editor(
 
 deltaT = st.number_input("Enter ΔTmin (°C)", value=10)
 
-if st.button("Generate Composite Curves"):
+if st.button("Generate Correct Composite Curves"):
     hot = data[data["Type"] == "Hot"].copy()
     cold = data[data["Type"] == "Cold"].copy()
 
-    # 2. Pinch Calculations (Shifted Temperatures)
+    # 2. Pinch Calculations for Min Heating (QH)[cite: 1]
     hot["Ts"] = hot["Tin"] - deltaT/2
     hot["Tt"] = hot["Tout"] - deltaT/2
     cold["Ts"] = cold["Tin"] + deltaT/2
     cold["Tt"] = cold["Tout"] + deltaT/2
 
-    temps = sorted(list(set(list(hot["Ts"]) + list(hot["Tt"]) + list(cold["Ts"]) + list(cold["Tt"]))), reverse=True)
+    temps_shifted = sorted(list(set(list(hot["Ts"]) + list(hot["Tt"]) + list(cold["Ts"]) + list(cold["Tt"]))), reverse=True)
     
     dh_intervals = []
-    for i in range(len(temps)-1):
-        th, tl = temps[i], temps[i+1]
+    for i in range(len(temps_shifted)-1):
+        th, tl = temps_shifted[i], temps_shifted[i+1]
         cp_h = hot[(hot["Ts"] >= th) & (hot["Tt"] <= tl)]["Cp"].sum()
         cp_c = cold[(cold["Tt"] >= th) & (cold["Ts"] <= tl)]["Cp"].sum()
         dh_intervals.append((cp_h - cp_c) * (th - tl))
@@ -45,18 +45,19 @@ if st.button("Generate Composite Curves"):
     
     min_heat = abs(min(cascade)) if min(cascade) < 0 else 0
 
-    # 3. Plotting Composite Curves (Actual Temperatures)
-    # Hot Composite: Calculate from Top to Bottom
-    h_all_t = sorted(list(set(list(hot["Tin"]) + list(hot["Tout"]))), reverse=True)
+    # 3. Plotting Logic (Calculating from Bottom-Up for both)[cite: 1]
+    
+    # Hot Composite: Start from lowest T, Q = 0
+    h_all_t = sorted(list(set(list(hot["Tin"]) + list(hot["Tout"]))))
     h_q, h_t_plot = [0], [h_all_t[0]]
     for i in range(len(h_all_t)-1):
-        th, tl = h_all_t[i], h_all_t[i+1]
+        tl, th = h_all_t[i], h_all_t[i+1]
         cp = hot[(hot["Tin"] >= th) & (hot["Tout"] <= tl)]["Cp"].sum()
         h_q.append(h_q[-1] + cp * (th - tl))
-        h_t_plot.append(tl)
+        h_t_plot.append(th)
 
-    # Cold Composite: Calculate from Bottom to Top, starting at min_heat
-    c_all_t = sorted(list(set(list(cold["Tin"]) + list(cold["Tout"]))), reverse=False)
+    # Cold Composite: Start from lowest T, Q = min_heat (the horizontal shift)[cite: 1]
+    c_all_t = sorted(list(set(list(cold["Tin"]) + list(cold["Tout"]))))
     c_q, c_t_plot = [min_heat], [c_all_t[0]]
     for i in range(len(c_all_t)-1):
         tl, th = c_all_t[i], c_all_t[i+1]
@@ -64,19 +65,19 @@ if st.button("Generate Composite Curves"):
         c_q.append(c_q[-1] + cp * (th - tl))
         c_t_plot.append(th)
 
-    # Visualization[cite: 1]
+    # 4. Professional Visualization[cite: 1]
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(h_q, h_t_plot, color='red', label='Hot Composite', linewidth=1.5)
     ax.plot(c_q, c_t_plot, color='blue', label='Cold Composite', linewidth=1.5)
     
-    # Matching the 'clear one.jpg' style
+    # Set axis limits and grid to match "clear one.jpg"
     ax.set_xlim(0, 100000)
     ax.set_ylim(30, 200)
     ax.set_xticks(np.arange(0, 110000, 10000))
     ax.set_yticks(np.arange(30, 210, 20))
-    ax.set_xlabel("H (kW)")
-    ax.set_ylabel("T (°C)")
-    ax.grid(True, which='both', color='gray', linestyle='-', linewidth=0.5)
+    ax.set_xlabel("Enthalpy H (kW)")
+    ax.set_ylabel("Temperature T (°C)")
+    ax.grid(True, which='both', color='gray', linestyle='-', linewidth=0.5, alpha=0.7)
     ax.legend()
     
     st.pyplot(fig)
