@@ -10,7 +10,9 @@ st.sidebar.write("Graduation Project")
 
 st.write("Enter Stream Data")
 
-# Input Table
+# =============================
+# INPUT TABLE
+# =============================
 data = st.data_editor(
     pd.DataFrame({
         "Stream": ["H1", "C1"],
@@ -24,38 +26,41 @@ data = st.data_editor(
 
 deltaT = st.number_input("Enter ΔTmin", value=10.0)
 
+# =============================
+# MAIN BUTTON
+# =============================
 if st.button("Calculate Pinch"):
 
     hot = data[data["Type"] == "Hot"].copy()
     cold = data[data["Type"] == "Cold"].copy()
 
     # =============================
-    # 🔵 SHIFT TEMPERATURES
+    # SHIFT TEMPERATURES
     # =============================
-    hot["Tin_shift"] = hot["Tin"] - deltaT/2
-    hot["Tout_shift"] = hot["Tout"] - deltaT/2
+    hot["Tin_s"] = hot["Tin"] - deltaT/2
+    hot["Tout_s"] = hot["Tout"] - deltaT/2
 
-    cold["Tin_shift"] = cold["Tin"] + deltaT/2
-    cold["Tout_shift"] = cold["Tout"] + deltaT/2
+    cold["Tin_s"] = cold["Tin"] + deltaT/2
+    cold["Tout_s"] = cold["Tout"] + deltaT/2
 
     st.subheader("Shifted Temperatures")
     st.write(pd.concat([hot, cold]))
 
     # =============================
-    # 🔵 TEMPERATURE LEVELS
+    # TEMPERATURE LEVELS
     # =============================
     temps = sorted(set(
-        list(hot["Tin_shift"]) + list(hot["Tout_shift"]) +
-        list(cold["Tin_shift"]) + list(cold["Tout_shift"])
+        list(hot["Tin_s"]) + list(hot["Tout_s"]) +
+        list(cold["Tin_s"]) + list(cold["Tout_s"])
     ), reverse=True)
 
     st.subheader("Temperature Intervals")
     st.write(temps)
 
     # =============================
-    # 🔵 HEAT CASCADE
+    # HEAT CASCADE
     # =============================
-    interval_data = []
+    intervals = []
 
     for i in range(len(temps)-1):
 
@@ -64,26 +69,28 @@ if st.button("Calculate Pinch"):
         dT = t_high - t_low
 
         cp_hot = hot[
-            (hot["Tin_shift"] > t_low) & (hot["Tout_shift"] < t_high)
+            (hot["Tin_s"] > t_low) & (hot["Tout_s"] < t_high)
         ]["Cp"].sum()
 
         cp_cold = cold[
-            (cold["Tout_shift"] > t_low) & (cold["Tin_shift"] < t_high)
+            (cold["Tout_s"] > t_low) & (cold["Tin_s"] < t_high)
         ]["Cp"].sum()
 
-        deltaH = (cp_hot - cp_cold) * dT
+        dH = (cp_hot - cp_cold) * dT
 
-        interval_data.append([t_high, t_low, cp_hot, cp_cold, deltaH])
+        intervals.append([t_high, t_low, cp_hot, cp_cold, dH])
 
     cascade = pd.DataFrame(
-        interval_data,
+        intervals,
         columns=["T_high","T_low","Cp_hot","Cp_cold","ΔH"]
     )
 
     st.subheader("Heat Cascade Table")
     st.write(cascade)
 
-    # Cascade accumulation
+    # =============================
+    # CASCADE ACCUMULATION
+    # =============================
     heat = [0]
     for q in cascade["ΔH"]:
         heat.append(heat[-1] + q)
@@ -92,7 +99,7 @@ if st.button("Calculate Pinch"):
     st.write(cascade)
 
     # =============================
-    # 🔵 UTILITIES
+    # UTILITIES
     # =============================
     min_heat = abs(min(heat))
     adjusted = [h + min_heat for h in heat]
@@ -105,21 +112,21 @@ if st.button("Calculate Pinch"):
     st.write(min_cooling)
 
     # =============================
-    # 🔵 PINCH
+    # PINCH (FIXED)
     # =============================
-    pinch_index = adjusted.index(min(adjusted))
+    pinch_index = adjusted[:-1].index(min(adjusted[:-1]))
     pinch_temp = temps[pinch_index]
 
     st.subheader("Pinch Temperature")
     st.success(pinch_temp)
 
     # =============================
-    # 🔥 COMPOSITE CURVES
+    # COMPOSITE CURVES
     # =============================
     st.subheader("Composite Curves")
 
-    hot_streams = [(r["Tin_shift"], r["Tout_shift"], r["Cp"]) for _, r in hot.iterrows()]
-    cold_streams = [(r["Tin_shift"], r["Tout_shift"], r["Cp"]) for _, r in cold.iterrows()]
+    hot_streams = [(r["Tin_s"], r["Tout_s"], r["Cp"]) for _, r in hot.iterrows()]
+    cold_streams = [(r["Tin_s"], r["Tout_s"], r["Cp"]) for _, r in cold.iterrows()]
 
     hot_q = [0]
     cold_q = [min_heat]
@@ -139,7 +146,6 @@ if st.button("Calculate Pinch"):
         hot_q.append(hot_q[-1] + cp_hot * dT)
         cold_q.append(cold_q[-1] + cp_cold * dT)
 
-    # 🔥 Plot + pinch point
     plt.figure()
 
     plt.plot(hot_q, temps, marker='o', label="Hot Composite")
@@ -158,15 +164,14 @@ if st.button("Calculate Pinch"):
     st.pyplot(plt)
 
     # =============================
-    # 🔵 GRAND COMPOSITE CURVE (FIXED)
+    # GRAND COMPOSITE CURVE (FINAL FIX)
     # =============================
     st.subheader("Grand Composite Curve")
 
-    gcc_heat = adjusted[:-1]   # fix length mismatch
+    gcc_heat = adjusted[:-1]   # align with temps
     gcc_temp = temps
 
     plt.figure()
-
     plt.step(gcc_heat, gcc_temp, where="post")
 
     plt.xlabel("Net Heat Flow")
@@ -178,7 +183,7 @@ if st.button("Calculate Pinch"):
     st.pyplot(plt)
 
     # =============================
-    # 🔵 UTILITIES SUMMARY
+    # SUMMARY
     # =============================
     st.subheader("Utility Targets")
 
