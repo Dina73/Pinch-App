@@ -18,9 +18,9 @@ data = st.data_editor(
     pd.DataFrame({
         "Stream": ["H1", "H2", "C1", "C2"],
         "Type": ["Hot", "Hot", "Cold", "Cold"],
-        "Tin": [180.0, 150.0, 30.0, 60.0],
-        "Tout": [40.0, 60.0, 150.0, 170.0],
-        "Cp": [2.3, 1.5, 1.8, 2.0]
+        "Tin": [118.0, 103.0, 30.0, 65.0],
+        "Tout": [103.0, 84.0, 65.0, 85.0],
+        "Cp": [3116.4, 1148.4, 519.5, 485.1]
     }),
     num_rows="dynamic"
 )
@@ -28,7 +28,7 @@ data = st.data_editor(
 deltaT = st.number_input("Enter ΔTmin (°C)", value=10.0)
 
 # -----------------------------
-# Utilities & Calculation Logic
+# Utilities
 # -----------------------------
 def shift_temps(df, dTmin):
     df = df.copy()
@@ -45,21 +45,6 @@ def interval_cp_full_coverage(streams_df, Th, Tl):
             total += float(r["Cp"])
     return total
 
-def get_composite_data(df_type):
-    # Uses ACTUAL temperatures for the Composite Curve visualization
-    t_points = sorted(set(df_type["Tin"].tolist() + df_type["Tout"].tolist()), reverse=True)
-    q_values = [0.0]
-    t_values = [t_points[0]]
-    
-    for i in range(len(t_points)-1):
-        Th, Tl = t_points[i], t_points[i+1]
-        dT = Th - Tl
-        cp_sum = sum(row["Cp"] for _, row in df_type.iterrows() 
-                     if max(row["Tin"], row["Tout"]) >= Th and min(row["Tin"], row["Tout"]) <= Tl)
-        q_values.append(q_values[-1] + cp_sum * dT)
-        t_values.append(Tl)
-    return np.array(q_values), np.array(t_values)
-
 # -----------------------------
 # Main Calculation
 # -----------------------------
@@ -73,30 +58,28 @@ if st.button("Calculate Pinch"):
     cold = all_df[all_df["Type"] == "Cold"].copy()
 
     if hot.empty or cold.empty:
-        st.error("Requires both Hot and Cold streams to perform Pinch Analysis.")
+        st.error("Requires both Hot and Cold streams for Pinch Analysis.")
         st.stop()
 
-    # 1. Problem Table Method (using Shifted Temperatures)
+    # 1. Problem Table Method (Shifted)
     all_shifted = shift_temps(all_df, deltaT)
     hot_s = all_shifted[all_shifted["Type"] == "Hot"]
     cold_s = all_shifted[all_shifted["Type"] == "Cold"]
     
-    # Create temperature grid from shifted endpoints
-    temps = sorted(set(all_shifted["Tin_shift"].tolist() + all_shifted["Tout_shift"].tolist()), reverse=True)
-    intervals = list(zip(temps[:-1], temps[1:]))
+    temps_s = sorted(set(all_shifted["Tin_shift"].tolist() + all_shifted["Tout_shift"].tolist()), reverse=True)
+    intervals = list(zip(temps_s[:-1], temps_s[1:]))
 
-    # Calculate net heat flow per interval
-    interval_rows = []
+    interval_heat = []
     for Th, Tl in intervals:
         dT = Th - Tl
         Cp_h = interval_cp_full_coverage(hot_s, Th, Tl)
         Cp_c = interval_cp_full_coverage(cold_s, Th, Tl)
         dH = (Cp_h - Cp_c) * dT
-        interval_rows.append(dH)
+        interval_heat.append(dH)
 
     # 2. Heat Cascade & Utility Targets
     heat_points = [0.0]
-    for dh in interval_rows:
+    for dh in interval_heat:
         heat_points.append(heat_points[-1] + dh)
     
     min_heat = min(heat_points)
@@ -104,30 +87,40 @@ if st.button("Calculate Pinch"):
     adj_cascade = [h + min_heating_required for h in heat_points]
     min_cooling_required = adj_cascade[-1]
 
-    # 3. Results Metrics
+    # 3. Find Pinch
+    pinch_idx = adj_cascade.index(min(adj_cascade))
+    pinch_temp_s = temps_s[pinch_idx]
+
+    # 4. Results Metrics
     st.divider()
     col1, col2, col3 = st.columns(3)
-    
-    # Find Pinch Index (where adjusted cascade is zero)
-    pinch_idx = adj_cascade.index(min(adj_cascade))
-    pinch_temp_s = temps[pinch_idx]
-    
     col1.metric("Shifted Pinch Temp", f"{pinch_temp_s} °C")
-    col2.metric("Min Heating Required", f"{min_heating_required:,.2f} kW")
-    col3.metric("Min Cooling Required", f"{min_cooling_required:,.2f} kW")
+    col2.metric("Min Heating ($Q_{H,min}$)", f"{min_heating_required:,.2f} kW")
+    col3.metric("Min Cooling ($Q_{C,min}$)", f"{min_cooling_required:,.2f} kW")
 
-    # 4. Process Plots
+    # 5. Composite Curves Logic (Robust version)
+    def build_composite(df_type):
+        # Sort temperatures from low to high to build enthalpy cumulatively
+        t_pts = sorted(set(df_type["Tin"].tolist() + df_type["Tout"].tolist()))
+        q_cum = [0.0]
+        for i in range(len(t_pts)-1):
+            t_low, t_high = t_pts[i], t_pts[i+1]
+            cp_sum = sum(r["Cp"] for _, r in df_type.iterrows() 
+                         if min(r["Tin"], r["Tout"]) <= t_low and max(r["Tin"], r["Tout"]) >= t_high)
+            q_cum.append(q_cum[-1] + cp_sum * (t_high - t_low))
+        return np.array(q_cum), np.array(t_pts)
+
+    h_q, h_t = build_composite(hot)
+    c_q, c_t = build_composite(cold)
+
+    # SHIFT COLD CURVE: Move the blue line by the cooling utility requirement
+    c_q_shifted = c_q + min_cooling_required
+
+    # 6. Plots
     st.write("### Process Visualization")
     plot_col1, plot_col2 = st.columns(2)
 
     with plot_col1:
-        # Composite Curves (Actual T vs Cumulative Q)
-        h_q, h_t = get_composite_data(hot)
-        c_q, c_t = get_composite_data(cold)
-        
-        # Shift the cold curve horizontally by the cooling target
-        c_q_shifted = c_q + min_cooling_required
-
         fig1, ax1 = plt.subplots()
         ax1.plot(h_q, h_t, 'r-o', label="Hot Composite", markersize=4)
         ax1.plot(c_q_shifted, c_t, 'b-o', label="Cold Composite", markersize=4)
@@ -139,9 +132,8 @@ if st.button("Calculate Pinch"):
         st.pyplot(fig1)
 
     with plot_col2:
-        # Grand Composite Curve (Shifted T vs Net Q)
         fig2, ax2 = plt.subplots()
-        ax2.plot(adj_cascade, temps, 'g-o', label="Grand Composite", markersize=4)
+        ax2.plot(adj_cascade, temps_s, 'g-o', label="Grand Composite", markersize=4)
         ax2.axvline(0, color='black', linewidth=1, linestyle='--')
         ax2.set_xlabel("Net Heat Flow (kW)")
         ax2.set_ylabel("Shifted Temperature (°C)")
@@ -150,4 +142,4 @@ if st.button("Calculate Pinch"):
         ax2.legend()
         st.pyplot(fig2)
 
-    st.success(f"Pinch Point Details: Hot Stream Side = {pinch_temp_s + deltaT/2}°C | Cold Stream Side = {pinch_temp_s - deltaT/2}°C")
+    st.success(f"Pinch Point: Hot {pinch_temp_s + deltaT/2}°C | Cold {pinch_temp_s - deltaT/2}°C")
